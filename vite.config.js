@@ -8,5 +8,5 @@ export default defineConfig({
       babel: { plugins: [] },
     }),
   ],
-  base: '/operators-pm-board/',
+  base: '/',
 })
