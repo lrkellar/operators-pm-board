@@ -41,7 +41,7 @@ export default function Login() {
     })
 
     if (btnRef.current) {
-      btnRef.current.onclick = () => tokenClient.requestToken()
+      btnRef.current.onclick = () => tokenClient.requestAccessToken()
     }
   }
 
