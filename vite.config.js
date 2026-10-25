@@ -1,12 +1,7 @@
-import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  plugins: [
-    react({
-      // React Compiler is opt-in — disabled here, app works fine without it
-      babel: { plugins: [] },
-    }),
-  ],
+  plugins: [react()],
   base: '/operators-pm-board/',
 })
