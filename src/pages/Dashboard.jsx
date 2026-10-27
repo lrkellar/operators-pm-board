@@ -4,6 +4,7 @@ import { getProjects } from '../utils/projectUtils'
 import ProjectCard from '../components/ProjectCard'
 import SettingsPanel from '../components/SettingsPanel'
 import CalendarWidget from '../components/CalendarWidget'
+import VersionHistoryPanel from '../components/VersionHistoryPanel'
 
 export default function Dashboard({ onEdit, onTaskClick }) {
   const { getRows, setRows, loadDemoData, exportCSV, importCSV, logout, getCategories, getProjectSettings } = useStore()
@@ -14,6 +15,7 @@ export default function Dashboard({ onEdit, onTaskClick }) {
   const [newProjName,   setNewProjName]   = useState('')
   const [newProjErr,    setNewProjErr]    = useState('')
   const [settingsOpen,  setSettingsOpen]  = useState(false)
+  const [historyOpen,   setHistoryOpen]   = useState(false)
 
   const handleNewProject = () => {
     const name = newProjName.trim()
@@ -97,6 +99,7 @@ export default function Dashboard({ onEdit, onTaskClick }) {
 
         <button onClick={() => { setNewProjOpen(true); setNewProjName(''); setNewProjErr('') }} style={navBtn('#7c4dff')}>+ New Project</button>
         <button onClick={() => setSettingsOpen(true)} style={navBtn('#2a2a3e')}>⚙️ Settings</button>
+        <button onClick={() => setHistoryOpen(true)} style={navBtn('#2a2a3e')}>↶ History</button>
         <button onClick={handleExport} style={navBtn('#2a2a3e')}>⬇ Export CSV</button>        <label style={{ ...navBtn('#2a2a3e'), cursor: 'pointer' }}>
           ⬆ Import CSV
           <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
@@ -168,6 +171,7 @@ export default function Dashboard({ onEdit, onTaskClick }) {
       </div>
 
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {historyOpen && <VersionHistoryPanel onClose={() => setHistoryOpen(false)} />}
 
       {/* new project modal */}
       {newProjOpen && (

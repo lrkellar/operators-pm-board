@@ -14,6 +14,15 @@ export const STATUS_LABEL = {
   not_started: '⚪ Not Started',
 }
 
+export function safeExternalUrl(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
 const PRIORITY = ['overdue', 'at_risk', 'in_progress', 'not_started', 'complete']
 
 export function getProjects(rows) {

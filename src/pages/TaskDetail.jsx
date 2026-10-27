@@ -1,5 +1,5 @@
 import { useStore } from '../store/useStore'
-import { STATUS_COLOR, STATUS_LABEL, tasksWithResolvedDates } from '../utils/projectUtils'
+import { safeExternalUrl, STATUS_COLOR, STATUS_LABEL, tasksWithResolvedDates } from '../utils/projectUtils'
 
 export default function TaskDetail({ taskId, onBack, onEdit }) {
   const getRows = useStore(s => s.getRows)
@@ -160,9 +160,9 @@ export default function TaskDetail({ taskId, onBack, onEdit }) {
               </Section>
             )}
 
-            {task.file_link && (
+            {safeExternalUrl(task.file_link) && (
               <Section title="File / Link">
-                <a href={task.file_link} target="_blank" rel="noreferrer" style={{
+                <a href={safeExternalUrl(task.file_link)} target="_blank" rel="noreferrer" style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   background: '#1e1e2e', borderRadius: 8, padding: '8px 14px',
                   color: '#2196F3', fontSize: 13, textDecoration: 'none',

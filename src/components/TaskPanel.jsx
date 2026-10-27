@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STATUS_COLOR } from '../utils/projectUtils'
+import { safeExternalUrl, STATUS_COLOR } from '../utils/projectUtils'
 
 const STATUSES = ['not_started', 'in_progress', 'at_risk', 'overdue', 'complete']
 const TYPES    = ['task', 'milestone']
@@ -197,8 +197,8 @@ export default function TaskPanel({ task, allTasks, onSave, onDelete, onClose, o
       <div style={labelStyle}>Google Drive / File Link</div>
       <input style={inputStyle} placeholder="https://drive.google.com/..."
         value={form.file_link ?? ''} onChange={e => set('file_link', e.target.value)} />
-      {form.file_link && (
-        <a href={form.file_link} target="_blank" rel="noreferrer"
+      {safeExternalUrl(form.file_link) && (
+        <a href={safeExternalUrl(form.file_link)} target="_blank" rel="noreferrer"
           style={{ fontSize: 11, color: '#2196F3', marginTop: 4 }}>Open link ↗</a>
       )}
 
