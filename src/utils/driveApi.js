@@ -126,18 +126,29 @@ async function maintainRevisionWindow(fileId) {
 }
 
 async function writeFile(folderId, filename, existingId, content, mimeType = 'text/plain') {
-  const meta = existingId ? null : { name: filename, parents: [folderId] }
   const historyBeforeWrite = existingId ? await maintainRevisionWindow(existingId) : null
-  const url  = existingId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart'
-  const method = existingId ? 'PATCH' : 'POST'
+  let fileId = existingId
+  if (!fileId) {
+    const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: filename, parents: [folderId], mimeType }),
+    })
+    const created = await create.json()
+    if (!create.ok) throw new Error(created.error?.message ?? `Could not create ${filename}`)
+    fileId = created.id
+  }
 
-  const body = new FormData()
-  if (meta) body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
-  body.append('file', new Blob([content], { type: mimeType }))
-
-  const res = await fetch(url, { method, headers: authHeaders(), body })
+  // This update contains only media, so use Drive's simple upload format:
+  // the raw file bytes with the file MIME type, not a FormData wrapper.
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+    {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': mimeType },
+      body: new Blob([content], { type: mimeType }),
+    },
+  )
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.error?.message ?? `Could not save ${filename}`)
@@ -146,9 +157,9 @@ async function writeFile(folderId, filename, existingId, content, mimeType = 'te
   if (previousHead) {
     const recent = Date.now() - new Date(previousHead.modifiedTime).getTime() <= HISTORY_WINDOW_MS
     if (recent && !previousHead.keepForever) {
-      await setRevisionRetention(existingId, previousHead.id, true)
+      await setRevisionRetention(fileId, previousHead.id, true)
     } else if (!recent && previousHead.keepForever) {
-      await setRevisionRetention(existingId, previousHead.id, false)
+      await setRevisionRetention(fileId, previousHead.id, false)
     }
   }
 }
