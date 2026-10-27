@@ -1,13 +1,53 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 
 const CLIENT_ID = '883351541905-ual5as4i001ovkmuf1opc2blecjvl135.apps.googleusercontent.com'
-const SCOPES    = 'https://www.googleapis.com/auth/drive.file'
+const SCOPES    = 'openid profile email https://www.googleapis.com/auth/drive.file'
 
 export default function Login() {
   const setAuth    = useStore(s => s.setAuth)
   const authLoading = useStore(s => s.authLoading)
   const btnRef     = useRef(null)
+  const [authError, setAuthError] = useState('')
+
+  const initGIS = useCallback(() => {
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope:     SCOPES,
+      callback:  async (tokenResponse) => {
+        if (tokenResponse.error) {
+          setAuthError(tokenResponse.error_description ?? tokenResponse.error)
+          return
+        }
+        try {
+          const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+          })
+          const userInfo = await userRes.json()
+          if (!userRes.ok) {
+            setAuthError(`Google profile lookup failed (${userRes.status}): ${userInfo.error?.message ?? 'check the requested OAuth scopes'}`)
+            return
+          }
+          await setAuth({
+            accessToken: tokenResponse.access_token,
+            name:    userInfo.name,
+            email:   userInfo.email,
+            picture: userInfo.picture,
+          })
+        } catch (e) {
+          setAuthError(`Google sign-in failed: ${e.message}`)
+        }
+      },
+      error_callback: (error) => setAuthError(error?.message ?? error?.type ?? 'Google sign-in could not be opened.'),
+    })
+
+    if (btnRef.current) {
+      btnRef.current.onclick = () => {
+        setAuthError('')
+        tokenClient.requestAccessToken()
+      }
+    }
+  }, [setAuth])
 
   useEffect(() => {
     // Load Google Identity Services script
@@ -18,32 +58,7 @@ export default function Login() {
     script.onload = initGIS
     document.head.appendChild(script)
     return () => document.head.removeChild(script)
-  }, [])
-
-  const initGIS = () => {
-    const tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope:     SCOPES,
-      callback:  async (tokenResponse) => {
-        if (tokenResponse.error) return
-        // Get user info
-        const userRes  = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
-        })
-        const userInfo = await userRes.json()
-        await setAuth({
-          accessToken: tokenResponse.access_token,
-          name:    userInfo.name,
-          email:   userInfo.email,
-          picture: userInfo.picture,
-        })
-      },
-    })
-
-    if (btnRef.current) {
-      btnRef.current.onclick = () => tokenClient.requestAccessToken()
-    }
-  }
+  }, [initGIS])
 
   return (
     <div style={{
@@ -80,6 +95,8 @@ export default function Login() {
           )}
           {authLoading ? 'Connecting…' : 'Sign in with Google'}
         </button>
+
+        {authError && <div role="alert" style={{ color: '#F44336', fontSize: 12, lineHeight: 1.5, marginTop: 14 }}>{authError}</div>}
 
         <div style={{ color: '#333', fontSize: 11, marginTop: 20 }}>
           Only accesses files created by this app

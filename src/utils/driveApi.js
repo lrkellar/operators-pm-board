@@ -104,7 +104,7 @@ async function setRevisionRetention(fileId, revisionId, keepForever) {
 
 // Drive already stores each CSV/JSON upload as a revision. Pin revisions for
 // the requested seven-day rollback window, then release older pinned versions.
-async function maintainRevisionWindow(fileId, prepareForWrite = false) {
+async function maintainRevisionWindow(fileId) {
   const cutoff = Date.now() - HISTORY_WINDOW_MS
   const [revisions, fileResponse] = await Promise.all([
     listRevisions(fileId),
@@ -115,20 +115,21 @@ async function maintainRevisionWindow(fileId, prepareForWrite = false) {
   for (const revision of revisions) {
     const recent = new Date(revision.modifiedTime).getTime() >= cutoff
     const isHead = revision.id === file.headRevisionId
-    if (recent && (!isHead || prepareForWrite) && !revision.keepForever) {
+    if (isHead) continue // The current file body is always available from files.get.
+    if (recent && !revision.keepForever) {
       await setRevisionRetention(fileId, revision.id, true)
-    } else if (!recent && (!isHead || prepareForWrite) && revision.keepForever) {
+    } else if (!recent && revision.keepForever) {
       await setRevisionRetention(fileId, revision.id, false)
     }
   }
-  return revisions
+  return { revisions, headId: file.headRevisionId }
 }
 
 async function writeFile(folderId, filename, existingId, content, mimeType = 'text/plain') {
   const meta = existingId ? null : { name: filename, parents: [folderId] }
-  if (existingId) await maintainRevisionWindow(existingId, true)
+  const historyBeforeWrite = existingId ? await maintainRevisionWindow(existingId) : null
   const url  = existingId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart&keepRevisionForever=true`
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`
     : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart'
   const method = existingId ? 'PATCH' : 'POST'
 
@@ -140,6 +141,15 @@ async function writeFile(folderId, filename, existingId, content, mimeType = 'te
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.error?.message ?? `Could not save ${filename}`)
+  }
+  const previousHead = historyBeforeWrite?.revisions.find(revision => revision.id === historyBeforeWrite.headId)
+  if (previousHead) {
+    const recent = Date.now() - new Date(previousHead.modifiedTime).getTime() <= HISTORY_WINDOW_MS
+    if (recent && !previousHead.keepForever) {
+      await setRevisionRetention(existingId, previousHead.id, true)
+    } else if (!recent && previousHead.keepForever) {
+      await setRevisionRetention(existingId, previousHead.id, false)
+    }
   }
 }
 
@@ -182,8 +192,8 @@ export async function loadHistory() {
     findFile(folderId, JSON_FILENAME),
   ])
   const [csv, settings] = await Promise.all([
-    csvId ? maintainRevisionWindow(csvId) : [],
-    settingsId ? maintainRevisionWindow(settingsId) : [],
+    csvId ? maintainRevisionWindow(csvId).then(history => history.revisions) : [],
+    settingsId ? maintainRevisionWindow(settingsId).then(history => history.revisions) : [],
   ])
   const current = Date.now()
   const inWindow = revisions => revisions
