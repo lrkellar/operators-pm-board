@@ -5,10 +5,14 @@ import ProjectCard from '../components/ProjectCard'
 import SettingsPanel from '../components/SettingsPanel'
 import CalendarWidget from '../components/CalendarWidget'
 import VersionHistoryPanel from '../components/VersionHistoryPanel'
+import AIConnectorPanel from '../components/AIConnectorPanel'
+import { waitingCount } from '../utils/councilPlans'
 
-export default function Dashboard({ onEdit, onTaskClick }) {
+export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews }) {
   const { getRows, setRows, loadDemoData, exportCSV, importCSV, logout, getCategories, getProjectSettings } = useStore()
   const currentUser = useStore(s => s.currentUser)
+  const council     = useStore(s => s.council)
+  const reviewsWaiting = waitingCount(council)
   const [viewMode,      setViewMode]      = useState('Gantt')
   const [importMsg,     setImportMsg]     = useState('')
   const [newProjOpen,   setNewProjOpen]   = useState(false)
@@ -16,6 +20,7 @@ export default function Dashboard({ onEdit, onTaskClick }) {
   const [newProjErr,    setNewProjErr]    = useState('')
   const [settingsOpen,  setSettingsOpen]  = useState(false)
   const [historyOpen,   setHistoryOpen]   = useState(false)
+  const [aiConnectorOpen, setAiConnectorOpen] = useState(false)
 
   const handleNewProject = () => {
     const name = newProjName.trim()
@@ -98,7 +103,12 @@ export default function Dashboard({ onEdit, onTaskClick }) {
         </select>
 
         <button onClick={() => { setNewProjOpen(true); setNewProjName(''); setNewProjErr('') }} style={navBtn('#7c4dff')}>+ New Project</button>
+        <button onClick={onCompare} style={navBtn('#2a2a3e')}>▤ Compare Projects</button>
+        <button onClick={onReviews} style={navBtn(reviewsWaiting ? '#1565c0' : '#2a2a3e')} title="Plans from Project Council waiting for your review">
+          🗂 Plan reviews{reviewsWaiting ? ` (${reviewsWaiting})` : ''}
+        </button>
         <button onClick={() => setSettingsOpen(true)} style={navBtn('#2a2a3e')}>⚙️ Settings</button>
+        <button onClick={() => setAiConnectorOpen(true)} style={navBtn('#2a2a3e')}>🤖 AI Connector</button>
         <button onClick={() => setHistoryOpen(true)} style={navBtn('#2a2a3e')}>↶ History</button>
         <button onClick={handleExport} style={navBtn('#2a2a3e')}>⬇ Export CSV</button>        <label style={{ ...navBtn('#2a2a3e'), cursor: 'pointer' }}>
           ⬆ Import CSV
@@ -171,6 +181,7 @@ export default function Dashboard({ onEdit, onTaskClick }) {
       </div>
 
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {aiConnectorOpen && <AIConnectorPanel onClose={() => setAiConnectorOpen(false)} />}
       {historyOpen && <VersionHistoryPanel onClose={() => setHistoryOpen(false)} />}
 
       {/* new project modal */}

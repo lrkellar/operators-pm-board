@@ -4,6 +4,9 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Editor from './pages/Editor'
 import TaskDetail from './pages/TaskDetail'
+import CompareProjects from './pages/CompareProjects'
+import PlanReviews from './pages/PlanReviews'
+import PlanGate from './pages/PlanGate'
 
 export default function App() {
   const currentUser  = useStore(s => s.currentUser)
@@ -13,6 +16,9 @@ export default function App() {
 
   const [editingProject, setEditingProject] = useState(null)
   const [viewingTask,    setViewingTask]    = useState(null)
+  const [comparingProjects, setComparingProjects] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const [gate, setGate] = useState(null)   // { planId, level }
 
   if (!currentUser) return <Login />
 
@@ -49,6 +55,16 @@ export default function App() {
     />
   )
 
+  if (comparingProjects) return <CompareProjects onBack={() => setComparingProjects(false)} />
+
+  if (gate) return (
+    <PlanGate key={`${gate.planId}-${gate.level}`} planId={gate.planId} level={gate.level} onBack={() => setGate(null)} />
+  )
+
+  if (reviewing) return (
+    <PlanReviews onBack={() => setReviewing(false)} onOpenGate={(planId, level) => setGate({ planId, level })} />
+  )
+
   return (
     <>
       {driveSaving && (
@@ -61,7 +77,7 @@ export default function App() {
           Saving to Drive…
         </div>
       )}
-      <Dashboard onEdit={setEditingProject} onTaskClick={setViewingTask} />
+      <Dashboard onEdit={setEditingProject} onTaskClick={setViewingTask} onCompare={() => setComparingProjects(true)} onReviews={() => setReviewing(true)} />
     </>
   )
 }

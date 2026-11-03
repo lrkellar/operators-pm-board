@@ -7,7 +7,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 
 import { useStore } from '../store/useStore'
-import { rowsToNodes, rowsToEdges, STATUS_COLOR } from '../utils/projectUtils'
+import { formatGraphNodes, rowsToNodes, rowsToEdges, STATUS_COLOR } from '../utils/projectUtils'
 import { nodeTypes } from '../components/FlowNodes'
 import TaskPanel from '../components/TaskPanel'
 
@@ -114,15 +114,15 @@ export default function Editor({ projectId, onBack }) {
     setSelectedTask(newNode.data)
   }
 
-  const saveToStore = () => {
+  const saveToStore = (nodesToSave = nodes, edgesToSave = edges) => {
     // Build a map of target -> [sources] to support multiple deps
     const edgeDepMap = {}
-    edges.forEach(e => {
+    edgesToSave.forEach(e => {
       if (!edgeDepMap[e.target]) edgeDepMap[e.target] = []
       edgeDepMap[e.target].push(e.source)
     })
 
-    const updatedProjRows = nodes.map(n => ({
+    const updatedProjRows = nodesToSave.map(n => ({
       ...n.data,
       x: Math.round(n.position.x),
       y: Math.round(n.position.y),
@@ -133,6 +133,12 @@ export default function Editor({ projectId, onBack }) {
     setRows([...otherRows, ...updatedProjRows])
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const formatCanvas = () => {
+    const formattedNodes = formatGraphNodes(nodes, edges)
+    setNodes(formattedNodes)
+    saveToStore(formattedNodes, edges)
   }
 
   const allProjTasks = nodes.map(n => n.data)
@@ -174,6 +180,13 @@ export default function Editor({ projectId, onBack }) {
             style={{ background: '#16161f', border: '1px solid #333' }}
           />
         </ReactFlow>
+
+        <button onClick={formatCanvas} style={{
+          ...btnStyle('#2a2a3e'), position: 'absolute', top: 12, right: 12, zIndex: 5,
+          border: '1px solid #555', boxShadow: '0 2px 10px #0008',
+        }} title="Arrange tasks by date and dependencies">
+          ✨ Format it
+        </button>
 
         <TaskPanel
           task={selectedTask}

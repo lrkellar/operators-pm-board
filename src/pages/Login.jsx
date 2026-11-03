@@ -30,6 +30,7 @@ export default function Login() {
           }
           await setAuth({
             accessToken: tokenResponse.access_token,
+            expiresAt: Date.now() + Number(tokenResponse.expires_in ?? 3600) * 1000,
             name:    userInfo.name,
             email:   userInfo.email,
             picture: userInfo.picture,

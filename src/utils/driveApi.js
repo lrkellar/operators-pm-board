@@ -196,6 +196,24 @@ export async function saveSettings(obj) {
   await writeFile(folderId, JSON_FILENAME, existingId, content, 'application/json')
 }
 
+// Plans under review from Project Council (see councilPlans.js). Kept apart from projects.csv
+// so draft plans never mix with live projects until a level is promoted.
+const COUNCIL_FILENAME = 'council-plans.json'
+
+export async function loadCouncil() {
+  const folderId = await getOrCreateFolder()
+  const fileId   = await findFile(folderId, COUNCIL_FILENAME)
+  if (!fileId) return null
+  return readFile(fileId)
+}
+
+export async function saveCouncil(text) {
+  const folderId   = await getOrCreateFolder()
+  const existingId = await findFile(folderId, COUNCIL_FILENAME)
+  if (existingId && await readFile(existingId) === text) return
+  await writeFile(folderId, COUNCIL_FILENAME, existingId, text, 'application/json')
+}
+
 export async function loadHistory() {
   const folderId = await getOrCreateFolder()
   const [csvId, settingsId] = await Promise.all([

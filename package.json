@@ -5,17 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "mcp": "node mcp/server.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
     "frappe-gantt": "^1.2.2",
     "papaparse": "^5.7.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4",
     "reactflow": "^11.11.4",
+    "zod": "^4.6.7",
     "zustand": "^5.0.16"
   },
   "devDependencies": {
