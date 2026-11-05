@@ -14,3 +14,5 @@ body {
 /* React Flow overrides */
 .react-flow__renderer { background: #0f0f17; }
 .react-flow__attribution { display: none; }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

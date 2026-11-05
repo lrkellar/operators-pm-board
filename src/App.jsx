@@ -7,6 +7,7 @@ import TaskDetail from './pages/TaskDetail'
 import CompareProjects from './pages/CompareProjects'
 import PlanReviews from './pages/PlanReviews'
 import PlanGate from './pages/PlanGate'
+import GuidedPlan from './pages/GuidedPlan'
 
 export default function App() {
   const currentUser  = useStore(s => s.currentUser)
@@ -18,7 +19,8 @@ export default function App() {
   const [viewingTask,    setViewingTask]    = useState(null)
   const [comparingProjects, setComparingProjects] = useState(false)
   const [reviewing, setReviewing] = useState(false)
-  const [gate, setGate] = useState(null)   // { planId, level }
+  const [gate, setGate] = useState(null)   // { planId, level, from }
+  const [guided, setGuided] = useState(null) // { name, slug } while the guided planner is open
 
   if (!currentUser) return <Login />
 
@@ -58,7 +60,15 @@ export default function App() {
   if (comparingProjects) return <CompareProjects onBack={() => setComparingProjects(false)} />
 
   if (gate) return (
-    <PlanGate key={`${gate.planId}-${gate.level}`} planId={gate.planId} level={gate.level} onBack={() => setGate(null)} />
+    <PlanGate key={`${gate.planId}-${gate.level}`} planId={gate.planId} level={gate.level} onBack={() => setGate(null)}
+      backLabel={gate.from === 'guided' ? '← Guided session' : undefined} />
+  )
+
+  if (guided) return (
+    <GuidedPlan initialName={guided.name} slug={guided.slug}
+      onSlug={slug => setGuided(g => ({ ...g, slug }))}
+      onBack={() => setGuided(null)}
+      onOpenGate={(planId, level) => setGate({ planId, level, from: 'guided' })} />
   )
 
   if (reviewing) return (
@@ -77,7 +87,7 @@ export default function App() {
           Saving to Drive…
         </div>
       )}
-      <Dashboard onEdit={setEditingProject} onTaskClick={setViewingTask} onCompare={() => setComparingProjects(true)} onReviews={() => setReviewing(true)} />
+      <Dashboard onEdit={setEditingProject} onTaskClick={setViewingTask} onCompare={() => setComparingProjects(true)} onReviews={() => setReviewing(true)} onGuided={name => setGuided({ name, slug: null })} />
     </>
   )
 }

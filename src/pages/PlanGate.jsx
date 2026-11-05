@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
+import { handBackReview } from '../utils/plannerApi'
 import GanttChart from '../components/GanttChart'
 import { LEVEL_NAMES, LEVEL_STATUS, MARKS, currentRevision } from '../utils/councilPlans'
 
@@ -22,7 +23,7 @@ const day = d => (d ? `${MON[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10)
 const num = (v, dp = 1) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: dp }))
 const money = v => (v == null ? '—' : `$${Math.round(v).toLocaleString()}`)
 
-export default function PlanGate({ planId, level, onBack }) {
+export default function PlanGate({ planId, level, onBack, backLabel }) {
   const council         = useStore(s => s.council)
   const saveLevelReview = useStore(s => s.saveLevelReview)
   const promoteLevel    = useStore(s => s.promoteLevel)
@@ -106,9 +107,12 @@ export default function PlanGate({ planId, level, onBack }) {
       const st = decision === 'approved' ? 'approved' : decision === 'changes_requested' ? 'changes_requested' : levelObj.status
       await saveLevelReview(planId, level, rev.revision, review, st)
       setDirty(false)
-      setMsg(decision === 'approved' ? 'Level approved. The council will lock it and start the next level.'
+      // A guided plan's council runs on this PC: hand the review straight to it.
+      const hb = decision ? await handBackReview(planId, level, rev.revision, review) : null
+      const handed = hb?.started ? ' Sent to the council on your PC; it has started.' : hb && !hb.sent ? ` (Could not reach the planner: ${hb.error})` : ''
+      setMsg((decision === 'approved' ? 'Level approved. The council will lock it and start the next level.'
         : decision === 'changes_requested' ? 'Sent back. The council will revise and publish a new revision.'
-          : 'Review saved. You can come back and finish it later.')
+          : 'Review saved. You can come back and finish it later.') + handed)
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -146,7 +150,7 @@ export default function PlanGate({ planId, level, onBack }) {
     <div style={{ minHeight: '100vh', background: '#0f0f17', color: '#fff' }}>
       {/* top bar */}
       <div style={bar}>
-        <button onClick={onBack} style={btn('#333')}>← Plans</button>
+        <button onClick={onBack} style={btn('#333')}>{backLabel ?? '← Plans'}</button>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontWeight: 800, fontSize: 16 }}>{plan.name} · L{level} {LEVEL_NAMES[level]}</div>
           <div style={{ fontSize: 12, color: '#888' }}>

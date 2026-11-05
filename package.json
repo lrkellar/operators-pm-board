@@ -8,7 +8,9 @@
     "mcp": "node mcp/server.js",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "planner": "node planner/runner.mjs",
+    "planner:check": "node planner/runner.mjs --check"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",

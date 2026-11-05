@@ -8,7 +8,7 @@ import VersionHistoryPanel from '../components/VersionHistoryPanel'
 import AIConnectorPanel from '../components/AIConnectorPanel'
 import { waitingCount } from '../utils/councilPlans'
 
-export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews }) {
+export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews, onGuided }) {
   const { getRows, setRows, loadDemoData, exportCSV, importCSV, logout, getCategories, getProjectSettings } = useStore()
   const currentUser = useStore(s => s.currentUser)
   const council     = useStore(s => s.council)
@@ -41,6 +41,11 @@ export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews })
     setNewProjName('')
     setNewProjErr('')
     onEdit(id)
+  }
+
+  const startGuided = () => {
+    setNewProjOpen(false)
+    onGuided(newProjName.trim())
   }
 
   const handleDeleteProject = (projectId) => {
@@ -192,7 +197,7 @@ export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews })
         }} onClick={() => setNewProjOpen(false)}>
           <div style={{
             background: '#16161f', border: '1px solid #7c4dff', borderRadius: 14,
-            padding: 28, width: '100%', maxWidth: 360,
+            padding: 28, width: '100%', maxWidth: 440, margin: 16,
           }} onClick={e => e.stopPropagation()}>
             <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 16 }}>New Project</div>
             <input
@@ -205,13 +210,22 @@ export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews })
               placeholder="Project name"
               value={newProjName}
               onChange={e => { setNewProjName(e.target.value); setNewProjErr('') }}
-              onKeyDown={e => e.key === 'Enter' && handleNewProject()}
+              onKeyDown={e => e.key === 'Enter' && startGuided()}
             />
             {newProjErr && <div style={{ color: '#F44336', fontSize: 12, marginBottom: 8 }}>{newProjErr}</div>}
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button onClick={handleNewProject} style={{ ...navBtn('#7c4dff'), flex: 1, justifyContent: 'center' }}>
-                Create &amp; Open Editor
-              </button>
+            <button onClick={startGuided} style={{
+              width: '100%', textAlign: 'left', background: '#24203a', border: '1px solid #7c4dff',
+              borderRadius: 10, color: '#fff', padding: '14px 16px', cursor: 'pointer', marginTop: 6,
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>🧭 Plan it with the council →</div>
+              <div style={{ color: '#a9a3c9', fontSize: 12, lineHeight: 1.5, marginTop: 4 }}>
+                A guided interview: the scoping lead writes the brief, an expert panel settles the key decisions with you,
+                then the plan is built and reviewed level by level, from outline to steps. Runs on your Claude subscription.
+              </div>
+            </button>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+              <button onClick={handleNewProject} style={navBtn('#2a2a3e')}>Blank project</button>
+              <span style={{ color: '#666', fontSize: 12, flex: 1 }}>one placeholder task, edit it yourself</span>
               <button onClick={() => setNewProjOpen(false)} style={navBtn('#333')}>Cancel</button>
             </div>
           </div>
