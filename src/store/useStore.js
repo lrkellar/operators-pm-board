@@ -97,7 +97,7 @@ export const useStore = create((set, get) => ({
 
   setRows: async (rows) => {
     set({ projectData: rows })
-    await get()._saveToDrive()
+    return get()._saveToDrive()
   },
 
   loadFromDrive: async () => {
@@ -130,8 +130,11 @@ export const useStore = create((set, get) => ({
         saveCSV(Papa.unparse(projectData, { columns: csvColumns(projectData) })),
         saveSettings({ categories, projectSettings }),
       ])
+      set({ driveError: null })
+      return true
     } catch (e) {
       set({ driveError: 'Failed to save to Drive: ' + e.message })
+      return false
     } finally {
       set({ driveSaving: false })
     }
@@ -201,7 +204,8 @@ export const useStore = create((set, get) => ({
     const existing = get().projectData
     const prior = Object.fromEntries(existing.filter(r => r.project_id === projectId).map(r => [r.task_id, r]))
     const merged = rows.map(r => prior[r.task_id] ? { ...r, status: prior[r.task_id].status, progress: prior[r.task_id].progress, x: prior[r.task_id].x, y: prior[r.task_id].y } : r)
-    await get().setRows([...existing.filter(r => r.project_id !== projectId), ...merged])
+    // Only report success once Drive has it, so a failed save is retried next time.
+    if (!await get().setRows([...existing.filter(r => r.project_id !== projectId), ...merged])) throw new Error(get().driveError ?? 'Could not save to Drive.')
     return { projectId, count: merged.length }
   },
 

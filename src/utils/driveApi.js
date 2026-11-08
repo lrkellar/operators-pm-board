@@ -13,6 +13,23 @@ let _token = null  // current access token
 export function setToken(token) { _token = token }
 export function getToken()      { return _token }
 
+// The browser's Google token lasts about an hour. The board registers a provider that hands back a
+// fresh one (silently re-asking Google when needed); the local MCP connector has none and uses setToken.
+let _tokenProvider = null  // async (force) => accessToken
+export function setTokenProvider(fn) { _tokenProvider = fn }
+
+// Every Drive call goes through here: fresh token first, and one retry with a new token on a 401.
+async function driveFetch(url, options = {}) {
+  if (_tokenProvider) _token = await _tokenProvider(false)
+  const withToken = () => ({ ...options, headers: { ...(options.headers ?? {}), Authorization: `Bearer ${_token}` } })
+  let res = await fetch(url, withToken())
+  if (res.status === 401 && _tokenProvider) {
+    _token = await _tokenProvider(true)
+    res = await fetch(url, withToken())
+  }
+  return res
+}
+
 function authHeaders() {
   return { Authorization: `Bearer ${_token}` }
 }
@@ -24,7 +41,7 @@ async function getOrCreateFolder() {
   const q = encodeURIComponent(
     `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
   )
-  const res = await fetch(
+  const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`,
     { headers: authHeaders() }
   )
@@ -32,7 +49,7 @@ async function getOrCreateFolder() {
   if (data.files?.length > 0) return data.files[0].id
 
   // Create folder
-  const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+  const create = await driveFetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -50,7 +67,7 @@ async function findFile(folderId, filename) {
   const q = encodeURIComponent(
     `name='${filename}' and '${folderId}' in parents and trashed=false`
   )
-  const res = await fetch(
+  const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`,
     { headers: authHeaders() }
   )
@@ -59,7 +76,7 @@ async function findFile(folderId, filename) {
 }
 
 async function readFile(fileId) {
-  const res = await fetch(
+  const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
     { headers: authHeaders() }
   )
@@ -75,7 +92,7 @@ async function listRevisions(fileId) {
       fields: 'nextPageToken,revisions(id,modifiedTime,keepForever,lastModifyingUser(displayName,emailAddress))',
     })
     if (pageToken) params.set('pageToken', pageToken)
-    const res = await fetch(
+    const res = await driveFetch(
       `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?${params}`,
       { headers: authHeaders() },
     )
@@ -88,7 +105,7 @@ async function listRevisions(fileId) {
 }
 
 async function setRevisionRetention(fileId, revisionId, keepForever) {
-  const res = await fetch(
+  const res = await driveFetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}`,
     {
       method: 'PATCH',
@@ -102,13 +119,27 @@ async function setRevisionRetention(fileId, revisionId, keepForever) {
   }
 }
 
+// Drive does not allow un-pinning: "Once a blob file revision is set to Keep Forever, it can only be
+// downloaded or deleted." So a pinned revision that has left the window is deleted (never the head).
+async function releaseRevision(fileId, revisionId) {
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}`,
+    { method: 'DELETE', headers: authHeaders() },
+  )
+  if (!res.ok && res.status !== 404) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error?.message ?? 'Could not release an old Drive revision')
+  }
+}
+
 // Drive already stores each CSV/JSON upload as a revision. Pin revisions for
 // the requested seven-day rollback window, then release older pinned versions.
+// History upkeep never blocks a save: a failure here is logged and the save goes ahead.
 async function maintainRevisionWindow(fileId) {
   const cutoff = Date.now() - HISTORY_WINDOW_MS
   const [revisions, fileResponse] = await Promise.all([
     listRevisions(fileId),
-    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=headRevisionId`, { headers: authHeaders() }),
+    driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=headRevisionId`, { headers: authHeaders() }),
   ])
   const file = await fileResponse.json()
   if (!fileResponse.ok) throw new Error(file.error?.message ?? 'Could not inspect Drive revision history')
@@ -119,17 +150,19 @@ async function maintainRevisionWindow(fileId) {
     if (recent && !revision.keepForever) {
       await setRevisionRetention(fileId, revision.id, true)
     } else if (!recent && revision.keepForever) {
-      await setRevisionRetention(fileId, revision.id, false)
+      await releaseRevision(fileId, revision.id)
     }
   }
   return { revisions, headId: file.headRevisionId }
 }
 
 async function writeFile(folderId, filename, existingId, content, mimeType = 'text/plain') {
-  const historyBeforeWrite = existingId ? await maintainRevisionWindow(existingId) : null
+  const historyBeforeWrite = existingId
+    ? await maintainRevisionWindow(existingId).catch(e => { console.warn(`Drive history upkeep skipped for ${filename}: ${e.message}`); return null })
+    : null
   let fileId = existingId
   if (!fileId) {
-    const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+    const create = await driveFetch('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: filename, parents: [folderId], mimeType }),
@@ -141,7 +174,7 @@ async function writeFile(folderId, filename, existingId, content, mimeType = 'te
 
   // This update contains only media, so use Drive's simple upload format:
   // the raw file bytes with the file MIME type, not a FormData wrapper.
-  const res = await fetch(
+  const res = await driveFetch(
     `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
     {
       method: 'PATCH',
@@ -156,10 +189,14 @@ async function writeFile(folderId, filename, existingId, content, mimeType = 'te
   const previousHead = historyBeforeWrite?.revisions.find(revision => revision.id === historyBeforeWrite.headId)
   if (previousHead) {
     const recent = Date.now() - new Date(previousHead.modifiedTime).getTime() <= HISTORY_WINDOW_MS
-    if (recent && !previousHead.keepForever) {
-      await setRevisionRetention(fileId, previousHead.id, true)
-    } else if (!recent && previousHead.keepForever) {
-      await setRevisionRetention(fileId, previousHead.id, false)
+    try {
+      if (recent && !previousHead.keepForever) {
+        await setRevisionRetention(fileId, previousHead.id, true)
+      } else if (!recent && previousHead.keepForever) {
+        await releaseRevision(fileId, previousHead.id)
+      }
+    } catch (e) {
+      console.warn(`Drive history upkeep skipped for ${filename}: ${e.message}`)
     }
   }
 }
@@ -221,8 +258,8 @@ export async function loadHistory() {
     findFile(folderId, JSON_FILENAME),
   ])
   const [csv, settings] = await Promise.all([
-    csvId ? maintainRevisionWindow(csvId).then(history => history.revisions) : [],
-    settingsId ? maintainRevisionWindow(settingsId).then(history => history.revisions) : [],
+    csvId ? maintainRevisionWindow(csvId).then(history => history.revisions).catch(() => listRevisions(csvId)) : [],
+    settingsId ? maintainRevisionWindow(settingsId).then(history => history.revisions).catch(() => listRevisions(settingsId)) : [],
   ])
   const current = Date.now()
   const inWindow = revisions => revisions
@@ -236,7 +273,7 @@ export async function loadHistory() {
 
 export async function restoreRevision({ fileId, revisionId, kind }) {
   const folderId = await getOrCreateFolder()
-  const response = await fetch(
+  const response = await driveFetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?alt=media`,
     { headers: authHeaders() },
   )
