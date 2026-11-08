@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
-
-const CLIENT_ID = '883351541905-ual5as4i001ovkmuf1opc2blecjvl135.apps.googleusercontent.com'
-const SCOPES    = 'openid profile email https://www.googleapis.com/auth/drive.file'
+import { GOOGLE_CLIENT_ID as CLIENT_ID, GOOGLE_SCOPES as SCOPES } from '../utils/googleConfig'
 
 export default function Login() {
   const setAuth    = useStore(s => s.setAuth)

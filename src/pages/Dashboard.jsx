@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { getProjects } from '../utils/projectUtils'
 import ProjectCard from '../components/ProjectCard'
@@ -42,6 +42,12 @@ export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews, o
     setNewProjErr('')
     onEdit(id)
   }
+
+  // Finished guided plans on this PC land on the projects page by themselves (when the planner is running).
+  const boardNotice = useStore(s => s.boardNotice)
+  const clearBoardNotice = useStore(s => s.clearBoardNotice)
+  const syncGuidedExports = useStore(s => s.syncGuidedExports)
+  useEffect(() => { syncGuidedExports().catch(() => {}) }, [syncGuidedExports])
 
   const startGuided = () => {
     setNewProjOpen(false)
@@ -132,6 +138,12 @@ export default function Dashboard({ onEdit, onTaskClick, onCompare, onReviews, o
       </div>
 
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 16px' }}>
+        {boardNotice && (
+          <div role="status" style={{ background: '#17261b', border: '1px solid #2e7d32', borderRadius: 10, padding: '10px 14px', marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ color: '#a5d6a7', fontSize: 13, flex: 1 }}>🧭 {boardNotice}</span>
+            <button onClick={clearBoardNotice} style={navBtn('#2a2a3e')}>OK</button>
+          </div>
+        )}
         {/* summary metrics */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 28, flexWrap: 'wrap' }}>
           {[

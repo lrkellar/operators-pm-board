@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import {
   plannerStatus, listGuided, startGuided, getGuided, replyGuided, retryGuided, stopGuided, fetchGateFile,
+  fetchProjectFile, markBoardSync,
 } from '../utils/plannerApi'
 import { LEVEL_NAMES } from '../utils/councilPlans'
+import RunCommand from '../components/RunCommand'
 
 // The guided New Project flow. The council runs on this PC through the planner (headless Claude Code on
 // Lance's Claude subscription); this page shows each turn's question and sends his answer back.
@@ -17,6 +19,14 @@ export default function GuidedPlan({ initialName = '', slug, onSlug, onBack, onO
     finally { setChecking(false) }
   }, [])
   useEffect(() => { check() }, [check])
+
+  // While the planner is not running, keep looking, so the page moves on as soon as it is started.
+  const offline = status?.offline
+  useEffect(() => {
+    if (!offline) return
+    const timer = setInterval(() => check(), 4000)
+    return () => clearInterval(timer)
+  }, [offline, check])
 
   const ready = status && !status.offline && status.auth?.subscription && status.paths?.library_ok && status.paths?.plugin_ok
 
@@ -54,7 +64,8 @@ function SetupCard({ status, onCheck, checking }) {
   const p = status.paths || {}
   const steps = [
     { done: !status.offline, title: 'Start the planner on this PC',
-      body: <>In the board's folder, double-click <code style={code}>Start planner.cmd</code> (or run <code style={code}>npm run planner</code>). Leave that window open while you plan.</> },
+      body: <RunCommand command={'node planner\\runner.mjs'} launcher="Start planner.cmd"
+        note="It should say it is signed in with your Claude subscription. Leave that window open while you plan; this page notices when it is running." /> },
     { done: !status.offline && a.installed, title: 'Install Claude Code',
       body: <>The planner drives Claude Code in the background. Install it from <code style={code}>claude.com/download</code> or with <code style={code}>npm install -g @anthropic-ai/claude-code</code>.</> },
     { done: !status.offline && a.subscription, title: 'Sign in with your Claude account',
@@ -202,8 +213,9 @@ function Session({ slug, onOpenGate }) {
   const lastUi = s.last_ui || claudeTurns[claudeTurns.length - 1]?.ui
   const cur = railKey(lastUi?.phase, lastUi?.level)
   const curIdx = RAIL.findIndex(r => r.key === cur)
-  const lastEntry = view.transcript[view.transcript.length - 1]
-  const activeUi = !running && lastEntry?.role === 'claude' ? lastEntry.ui : null
+  // Decisions answered on a gate page add side entries; the open question is the last main turn's.
+  const lastEntry = [...view.transcript].reverse().find(e => e.role === 'claude' || (e.role === 'author' && e.kind !== 'decision') || e.role === 'system')
+  const activeUi = !running && lastEntry?.role === 'claude' && ['waiting', 'waiting_review', 'done'].includes(s.status) ? lastEntry.ui : null
 
   const send = async (answer) => {
     setErr('')
@@ -237,6 +249,7 @@ function Session({ slug, onOpenGate }) {
           const isActive = e === lastEntry && e.role === 'claude' && !running
           if (e.role === 'author') return <AuthorBubble key={i} e={e} />
           if (e.role === 'system') return <SystemLine key={i} e={e} />
+          if (e.role === 'decision') return <DecisionLine key={i} e={e} />
           return <ClaudeBubble key={i} e={e} active={isActive} />
         })}
 
@@ -250,6 +263,7 @@ function Session({ slug, onOpenGate }) {
           </div>
         )}
         {activeUi && <Answer ui={activeUi} slug={slug} planId={s.plan_id} onSend={send} onOpenGate={onOpenGate} />}
+        {view.exports?.length > 0 && <PlanFiles session={s} exports={view.exports} onChanged={refresh} />}
         {err && <div style={{ color: '#F44336', fontSize: 13, margin: '10px 0' }}>{err}</div>}
       </main>
     </div>
@@ -262,8 +276,18 @@ function AuthorBubble({ e }) {
       <div style={{ maxWidth: '80%', background: '#2b2350', border: '1px solid #4a3d8a', borderRadius: '12px 12px 2px 12px', padding: '10px 14px', fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
         {e.kind === 'idea' && <div style={{ fontSize: 11, color: '#b3a6ff', fontWeight: 700, marginBottom: 4 }}>YOUR IDEA</div>}
         {e.kind === 'review' && <div style={{ fontSize: 11, color: '#b3a6ff', fontWeight: 700, marginBottom: 4 }}>GATE REVIEW</div>}
+        {e.kind === 'decision' && <div style={{ fontSize: 11, color: '#b3a6ff', fontWeight: 700, marginBottom: 4 }}>ANSWERED ON THE GATE PAGE</div>}
         {e.text}
       </div>
+    </div>
+  )
+}
+
+function DecisionLine({ e }) {
+  const color = e.status === 'resolved' ? '#81C784' : e.status === 'question' ? '#FFB74D' : '#b39dff'
+  return (
+    <div style={{ margin: '6px 0', fontSize: 12.5, color: '#bbb', lineHeight: 1.5, borderLeft: `3px solid ${color}`, paddingLeft: 10 }}>
+      <b style={{ color }}>{e.id} · {e.status === 'resolved' ? 'resolved' : e.status === 'question' ? 'follow-up' : 'updated'}</b> {e.text}
     </div>
   )
 }
@@ -282,6 +306,7 @@ function ClaudeBubble({ e, active }) {
         THE COUNCIL{ui.step ? ` · ${ui.step}` : ''}{e.activity ? ` · ${e.activity} actions` : ''}{e.seconds > 30 ? ` · ${fmtDur(e.seconds)}` : ''}
       </div>
       <div style={{ background: '#16161f', border: '1px solid #2a2a3e', borderRadius: '12px 12px 12px 2px', padding: '12px 16px' }}>
+        {ui.note && <div style={{ borderBottom: '1px solid #2a2a3e', paddingBottom: 8, marginBottom: 8 }}><Md text={ui.note} /></div>}
         <Md text={ui.say} />
         {ui.files?.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
@@ -468,6 +493,7 @@ function DecisionCard({ d, pick, onPick }) {
 function GateCard({ gate, slug, planId, onOpenGate }) {
   const council = useStore(s => s.council)
   const importCouncilLevel = useStore(s => s.importCouncilLevel)
+  const ensureGoogleToken = useStore(s => s.ensureGoogleToken)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const lv = council.plans?.[planId]?.levels?.[String(gate.level)]
@@ -477,7 +503,12 @@ function GateCard({ gate, slug, planId, onOpenGate }) {
   const open = async () => {
     setErr(''); setBusy(true)
     try {
-      if (!onBoard) await importCouncilLevel(await fetchGateFile(slug, gate.file))
+      if (!onBoard) {
+        // Renew the Google sign-in first, while this click still counts as a user action (browsers only
+        // allow Google's renewal window right after a click).
+        await ensureGoogleToken()
+        await importCouncilLevel(await fetchGateFile(slug, gate.file))
+      }
       onOpenGate(planId, gate.level)
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -541,3 +572,67 @@ const btn = (bg) => ({
   background: bg, border: 'none', borderRadius: 6, color: '#fff', padding: '6px 14px',
   cursor: 'pointer', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6,
 })
+
+// The finished plans: download the CSVs, and choose which plan sits on the live projects page.
+function PlanFiles({ session, exports, onChanged }) {
+  const addCouncilExport = useStore(s => s.addCouncilExport)
+  const syncGuidedExports = useStore(s => s.syncGuidedExports)
+  const projectData = useStore(s => s.projectData)
+  const [busy, setBusy] = useState(null)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+  const sync = session.board_sync ?? {}
+
+  // First visit after the plan is finished: put it on the board straight away.
+  useEffect(() => {
+    if (exports.length && !Object.keys(sync).length) syncGuidedExports().then(a => { if (a.length) { setMsg(`Added to your projects page: ${a.map(x => `${x.scenario}, ${x.count} tasks`).join('; ')}.`); onChanged() } }).catch(e => setErr(e.message))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const download = async (e) => {
+    setErr('')
+    try {
+      const text = await fetchProjectFile(session.slug, e.file)
+      const url = URL.createObjectURL(new Blob(['\uFEFF' + text], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url; a.download = `${session.slug}-${e.scenario}.csv`; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+    } catch (x) { setErr(x.message) }
+  }
+  const putOnBoard = async (e) => {
+    setErr(''); setMsg(''); setBusy(e.scenario)
+    try {
+      const r = await addCouncilExport(session.plan_id, session.name, e.scenario, await fetchProjectFile(session.slug, e.file))
+      await markBoardSync(session.slug, { scenario: e.scenario, mtime: e.mtime, project_id: r.projectId, tasks: r.count, primary: true })
+      setMsg(`${session.name} (${e.scenario}) is on your projects page with ${r.count} tasks.`)
+      onChanged()
+    } catch (x) { setErr(x.message) } finally { setBusy(null) }
+  }
+  return (
+    <div style={{ ...card, borderColor: '#2e7d32', marginTop: 16 }}>
+      <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Your plans</div>
+      <div style={{ color: '#9a9ab0', fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>
+        One spreadsheet per plan. The {session.board_scenario || 'bootstrap'} plan goes onto your projects page by itself, and is updated there
+        whenever the council re-exports it; status and progress you've set on tasks are kept. Put another plan on the page too if you want to compare.
+      </div>
+      {exports.map(e => {
+        const on = sync[e.scenario]
+        const present = on && projectData.some(r => r.project_id === on.project_id)
+        const stale = on && on.mtime !== e.mtime
+        return (
+          <div key={e.file} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid #2a2a3e' }}>
+            <span style={{ fontWeight: 700, fontSize: 13.5, width: 90, textTransform: 'capitalize' }}>{e.scenario}</span>
+            <span style={{ fontSize: 12, color: '#888', flex: 1, minWidth: 160 }}>
+              {e.file} · {Math.round(e.bytes / 1024)} KB{present ? ` · on your projects page (${on.tasks} tasks${stale ? ', newer export available' : ''})` : on ? ' · was on your projects page (removed there)' : ''}
+            </span>
+            <button onClick={() => download(e)} style={btn('#2a2a3e')}>⬇ CSV</button>
+            <button onClick={() => putOnBoard(e)} disabled={busy === e.scenario} style={btn(present && !stale ? '#1b3a20' : '#2e7d32')}>
+              {busy === e.scenario ? 'Adding…' : present ? (stale ? 'Update on projects page' : '✓ On projects page · re-sync') : 'Put on projects page'}
+            </button>
+          </div>
+        )
+      })}
+      {msg && <div style={{ color: '#a5d6a7', fontSize: 12.5, marginTop: 8 }}>{msg}</div>}
+      {err && <div style={{ color: '#F44336', fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+    </div>
+  )
+}

@@ -46,3 +46,12 @@ export async function handBackReview(planId, level, revision, review) {
     return { sent: false, error: e.message }
   }
 }
+
+// The guided session (if any) behind a plan on the board.
+export async function findGuidedSlug(planId) {
+  const { projects } = await listGuided()
+  return projects.find(x => x.plan_id === planId)?.slug ?? null
+}
+
+// One decision answered on a gate page: the council handles just that decision and the card refreshes.
+export const sendDecision = (slug, answer) => post(`/projects/${slug}/decision`, answer)

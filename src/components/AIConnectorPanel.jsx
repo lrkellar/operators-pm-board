@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
+import RunCommand, { getBoardFolder } from './RunCommand'
 
 const BRIDGE_URL = 'http://127.0.0.1:43127'
 
@@ -16,14 +17,20 @@ export default function AIConnectorPanel({ onClose }) {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
 
+  const check = useCallback(() => fetch(`${BRIDGE_URL}/status`, { cache: 'no-store' })
+    .then(readResponse)
+    .then(nextStatus => { setStatus(nextStatus); return nextStatus })
+    .catch(() => { setStatus({ connected: false, unavailable: true }); return null }), [])
+
+  useEffect(() => { check() }, [check])
+
+  // While the connector is not running, keep looking, so the panel notices as soon as it is started.
+  const unavailable = status?.unavailable
   useEffect(() => {
-    let active = true
-    fetch(`${BRIDGE_URL}/status`, { cache: 'no-store' })
-      .then(readResponse)
-      .then(nextStatus => { if (active) setStatus(nextStatus) })
-      .catch(() => { if (active) setStatus({ connected: false, unavailable: true }) })
-    return () => { active = false }
-  }, [])
+    if (!unavailable) return
+    const timer = setInterval(check, 3000)
+    return () => clearInterval(timer)
+  }, [unavailable, check])
 
   const connect = async () => {
     setBusy(true)
@@ -41,9 +48,10 @@ export default function AIConnectorPanel({ onClose }) {
       setStatus(nextStatus)
       setMessage(`Connected as ${nextStatus.email}. This Google session stays in local memory until it expires or you disconnect.`)
     } catch (e) {
-      setError(e.message.includes('fetch')
-        ? 'The local MCP process is not running. Add it to Claude Desktop, restart Claude, then try Connect again.'
-        : e.message)
+      if (/fetch|network/i.test(e.message)) {
+        setStatus({ connected: false, unavailable: true })
+        setError('The connector is not running on this computer. Start it with the commands above, then click Connect again.')
+      } else setError(e.message)
     } finally {
       setBusy(false)
     }
@@ -97,14 +105,25 @@ export default function AIConnectorPanel({ onClose }) {
           {status?.connected && <button disabled={busy} onClick={disconnect} style={buttonStyle('#333', busy)}>Disconnect</button>}
         </div>
 
+        {status?.unavailable && (
+          <div style={{ background: '#2a1f12', border: '1px solid #FF9800', borderRadius: 9, padding: 14, marginTop: 14 }}>
+            <div style={{ color: '#ffcc80', fontWeight: 700, fontSize: 13 }}>Start the connector</div>
+            <RunCommand command={'node mcp\\server.js'} launcher="Start connector.cmd"
+              note="You should see “local session bridge listening on 127.0.0.1:43127”. Leave that window open; this panel notices when it is running. For Claude Desktop to use the board tools in a chat, use the setup below instead, and close this window first." />
+          </div>
+        )}
+
         {message && <div role="status" style={{ color: '#4CAF50', fontSize: 12, lineHeight: 1.5, marginTop: 14 }}>{message}</div>}
         {error && <div role="alert" style={{ color: '#F44336', fontSize: 12, lineHeight: 1.5, marginTop: 14 }}>{error}</div>}
 
         <div style={{ borderTop: '1px solid #2a2a3e', marginTop: 22, paddingTop: 16 }}>
           <div style={{ color: '#aaa', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Claude Desktop setup</div>
           <div style={{ color: '#666', fontSize: 12, lineHeight: 1.6 }}>
-            Add the local server from <code>mcp/README.md</code> to Claude Desktop’s MCP configuration, restart Claude, then click Connect. No Anthropic API key is used. The Google session token is not saved to disk.
+            So Claude Desktop starts the connector itself: in Claude Desktop open <b>Settings → Developer → Edit Config</b>, add the
+            entry below inside <code>"mcpServers"</code>, save, quit Claude from the tray icon and reopen it, then click Connect.
+            No Anthropic API key is used. The Google session token is not saved to disk.
           </div>
+          <DesktopConfig />
         </div>
       </aside>
     </div>
@@ -116,3 +135,18 @@ const buttonStyle = (background, disabled) => ({
   color: disabled ? '#777' : '#fff', padding: '8px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
   fontWeight: 600, fontSize: 12,
 })
+
+function DesktopConfig() {
+  const [copied, setCopied] = useState(false)
+  const folder = getBoardFolder()
+  const text = JSON.stringify({ 'operators-pm-board': { command: 'node', args: [`${folder}\\mcp\\server.js`] } }, null, 2)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text.slice(1, -1).trim()); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch { /* selectable */ }
+  }
+  return (
+    <div style={{ position: 'relative', background: '#0b0b12', border: '1px solid #2a2a3e', borderRadius: 8, padding: '10px 12px', paddingRight: 70, marginTop: 8 }}>
+      <pre style={{ margin: 0, fontFamily: 'Consolas, Menlo, monospace', fontSize: 11.5, color: '#cfe8cf', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{text}</pre>
+      <button onClick={copy} style={{ position: 'absolute', top: 8, right: 8, background: copied ? '#2e7d32' : '#2a2a3e', border: 'none', borderRadius: 5, color: '#fff', fontSize: 11, fontWeight: 700, padding: '4px 9px', cursor: 'pointer' }}>{copied ? 'Copied' : 'Copy'}</button>
+    </div>
+  )
+}

@@ -1,3 +1,4 @@
+import Papa from 'papaparse'
 // Plan reviews from Project Council.
 //
 // council-plans.json (in the OperatorsPMBoard Drive folder, next to projects.csv) holds plans that
@@ -129,4 +130,57 @@ export function levelToBoardRows(plan, levelNo, scenario, projectId, projectName
     file_link: '',
     notes: [item.summary, `From Project Council plan ${plan.plan_id}, L${levelNo} ${LEVEL_NAMES[levelNo]}, ${scenario}.`].filter(Boolean).join(' '),
   }))
+}
+
+// ── Finished plans (out/plan-<scenario>.csv) onto the live projects page ─────────────────────────
+// The council's export has one row per WBS element. The board gets the deepest rows of each branch
+// (steps where the current stage is detailed, coarser items beyond it), with dates as YYYY-MM-DD and
+// dependencies as board task ids.
+export const councilProjectId = (planId, scenario) => `proj_council_${planId}_${scenario}`.replace(/[^a-z0-9_]/gi, '_').toLowerCase()
+
+export function councilCsvToBoardRows(csvText, { planId, planName, scenario }) {
+  const { data } = Papa.parse(String(csvText).replace(/^﻿/, ''), { header: true, skipEmptyLines: true })
+  const rows = data.filter(r => r['Task ID'])
+  const wbs = rows.map(r => String(r.WBS ?? ''))
+  const hasChildren = w => w && wbs.some(o => o !== w && o.startsWith(`${w}.`))
+  const leaves = rows.filter(r => !hasChildren(String(r.WBS ?? '')))
+  const projectId = councilProjectId(planId, scenario)
+  const safe = id => `${projectId}_${String(id).replace(/[^A-Za-z0-9]+/g, '_')}`
+  const ids = new Set(leaves.map(r => r['Task ID']))
+  const day = v => String(v ?? '').slice(0, 10)
+  const deps = v => String(v ?? '').split(/[;,]\s*/).map(x => x.trim().replace(/(FS|SS|FF|SF)([+-].*)?$/i, ''))
+    .filter(x => ids.has(x)).map(safe).join(',')
+  const phases = [...new Set(leaves.map(r => r.Phase))]
+  const placed = {}
+  return leaves.filter(r => day(r.Start) && day(r.Finish)).map(r => {
+    const col = phases.indexOf(r.Phase)
+    const row = (placed[col] = (placed[col] ?? -1) + 1)
+    const notes = [
+      r.Notes,
+      r.Deliverable && `Deliverable: ${r.Deliverable}`,
+      r['Done When'] && `Done when: ${r['Done When']}`,
+      r['Effort (min)'] && `Effort: ${Math.round(Number(r['Effort (min)']) / 6) / 10} h`,
+      Number(r['Cost (USD)']) ? `Cost: $${r['Cost (USD)']}` : '',
+      `From Project Council plan ${planId} (${scenario}), ${r['Work Package'] || r.Phase}.`,
+    ].filter(Boolean).map(x => x.trim()).join(' · ')
+    return {
+      project_id: projectId,
+      project_name: `${planName} (${scenario})`,
+      task_id: safe(r['Task ID']),
+      task_name: `${r['Task ID']} ${r['Task Name']}`.slice(0, 240),
+      start_date: day(r.Start),
+      end_date: day(r.Finish),
+      progress: '0',
+      dependencies: deps(r.Predecessors),
+      assignee: r.Resource || r['Owner Role'] || '',
+      status: 'not_started',
+      type: r.Milestone === 'Y' || /milestone/i.test(r.Type) && !/summary/i.test(r.Type) ? 'milestone' : 'task',
+      x: String(100 + col * 280),
+      y: String(100 + row * 110),
+      date_mode: 'fixed',
+      duration_days: '',
+      file_link: '',
+      notes,
+    }
+  })
 }

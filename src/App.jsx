@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './store/useStore'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -10,6 +10,47 @@ import PlanGate from './pages/PlanGate'
 import GuidedPlan from './pages/GuidedPlan'
 
 export default function App() {
+  return (
+    <>
+      <GoogleSessionBanner />
+      <Main />
+    </>
+  )
+}
+
+// Google access tokens last about an hour. Drive calls renew them silently; if the browser blocked that
+// (or it has simply run out while the page sat idle), this bar renews it with one click.
+function GoogleSessionBanner() {
+  const currentUser = useStore(s => s.currentUser)
+  const expired = useStore(s => s.googleExpired)
+  const refresh = useStore(s => s.refreshGoogleToken)
+  const [now, setNow] = useState(() => Date.now())
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 20000); return () => clearInterval(t) }, [])
+  if (!currentUser || (!expired && currentUser.expiresAt > now)) return null
+  const reconnect = async () => {
+    setBusy(true); setError('')
+    try { await refresh(); setNow(Date.now()) } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div role="alert" style={{
+      position: 'sticky', top: 0, zIndex: 1000, background: '#3a2a10', borderBottom: '1px solid #FF9800',
+      color: '#ffcc80', fontSize: 13, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+    }}>
+      <span style={{ flex: 1, minWidth: 220 }}>
+        Your Google sign-in has expired (Google limits them to about an hour), so the board can't reach Drive.
+        {error && <span style={{ color: '#ef9a9a' }}> {error}</span>}
+      </span>
+      <button onClick={reconnect} disabled={busy} style={{
+        background: '#FF9800', border: 'none', borderRadius: 6, color: '#1a1205', fontWeight: 700,
+        padding: '6px 14px', cursor: 'pointer', fontSize: 13,
+      }}>{busy ? 'Reconnecting…' : 'Reconnect Google'}</button>
+    </div>
+  )
+}
+
+function Main() {
   const currentUser  = useStore(s => s.currentUser)
   const driveLoading = useStore(s => s.driveLoading)
   const driveError   = useStore(s => s.driveError)

@@ -2,6 +2,21 @@
 
 The connector runs on the user's computer and exposes the board to Claude Desktop over MCP stdio. It reads and writes the same `projects.csv` and `settings.json` in Google Drive as the web app. It does not call an AI model API.
 
+## Quick start (no Claude Desktop setup)
+
+Double-click **Start connector.cmd** in the board folder, or run:
+
+```
+cd /d "C:\Users\Admin\Desktop\Programming\operators-pm-board"
+node mcp\server.js
+```
+
+Leave the window open, then click **Connect this session** in the board's AI Connector panel.
+When the connector isn't running, the panel shows these same commands with a Copy button.
+A copy started this way only proves the board can reach it. For Claude Desktop to use the
+board tools in a chat, Claude has to start the connector itself, which needs the setup below.
+Close this window before restarting Claude, because only one copy can hold port 43127.
+
 ## Claude Desktop setup on Windows
 
 1. Install this project and its dependencies with `npm ci`.

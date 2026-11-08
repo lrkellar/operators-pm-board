@@ -13,7 +13,7 @@
 // No dependencies beyond Node 20+.
 
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, appendFileSync } from 'node:fs'
 import { join, resolve, dirname, basename, relative, isAbsolute, delimiter } from 'node:path'
@@ -293,10 +293,70 @@ function describeTool(name, input = {}, cwd) {
   }
 }
 
-async function runTurn(slug, message) {
+// ── the job queue ──────────────────────────────────────────────────────────────────────────────
+// Every message to the council is a job. One headless Claude runs at a time (across all plans),
+// which keeps the work inside your plan's usage limits and keeps a session's turns in order.
+// A job is { kind: 'main' | 'decision', message, decision?: { id, level, revision, request } }.
+const queues = new Map()   // slug -> [job]
+
+function updateSession(slug, fn) {
   const s = loadSession(slug)
-  if (live.has(slug)) throw httpError(409, 'The council is still working on the last message.')
-  if (live.size > 0) throw httpError(409, `Another plan (${[...live.keys()][0]}) is running. One at a time keeps you inside your plan's usage limits.`)
+  fn(s)
+  saveSession(s)
+  return s
+}
+
+function enqueue(slug, job) {
+  job.qid = randomUUID()
+  job.at = now()
+  if (!queues.has(slug)) queues.set(slug, [])
+  queues.get(slug).push(job)
+  if (job.kind === 'decision') {
+    updateSession(slug, s => {
+      s.decision_replies = s.decision_replies || {}
+      s.decision_replies[job.decision.id] = { ...(s.decision_replies[job.decision.id] || {}), status: 'queued', request: job.decision.request, requested_at: job.at, level: job.decision.level, revision: job.decision.revision }
+    })
+  }
+  setImmediate(pump)
+  return job
+}
+
+let pumping = false
+async function pump() {
+  if (pumping || live.size > 0) return
+  pumping = true
+  try {
+    for (const [slug, q] of queues) {
+      if (!q.length) continue
+      const s = readJson(sessFile(slug))
+      if (!s || s.status === 'limit') continue   // paused until you press Continue
+      const job = q.shift()
+      try {
+        await runTurn(slug, job)
+      } catch (e) {
+        failJob(slug, job, e.message)
+        continue
+      }
+      return
+    }
+  } finally { pumping = false }
+}
+
+function failJob(slug, job, message) {
+  if (job.kind === 'decision') {
+    updateSession(slug, s => {
+      s.decision_replies = s.decision_replies || {}
+      s.decision_replies[job.decision.id] = { ...(s.decision_replies[job.decision.id] || {}), status: 'error', message, at: now() }
+    })
+  } else {
+    updateSession(slug, s => { s.status = 'error'; s.error = message; s.failed_job = job })
+    addTranscript(slug, { role: 'system', kind: 'error', text: message })
+  }
+}
+
+async function runTurn(slug, job) {
+  const message = job.message
+  const s = loadSession(slug)
   const auth = await checkAuth(true)
   if (!auth.subscription) throw httpError(412, auth.problem || 'Claude Code is not signed in with a Claude subscription.')
 
@@ -312,11 +372,14 @@ async function runTurn(slug, message) {
   if (CFG.load_plugin_dir) args.push('--plugin-dir', CFG.plugin)
   if (CFG.model) args.push('--model', CFG.model)
 
-  const state = { child: null, events: [], seq: 0, startedAt: Date.now(), agents: new Map(), resultText: null, isError: false, stderr: '' }
+  const state = { child: null, job, events: [], seq: 0, startedAt: Date.now(), agents: new Map(), resultText: null, isError: false, stderr: '', sessionId: null, model: null }
   const push = ev => { state.events.push({ seq: ++state.seq, at: now(), ...ev }); if (state.events.length > 400) state.events.splice(0, state.events.length - 400) }
   live.set(slug, state)
-  s.status = 'running'; s.turns += 1; s.error = null; s.limit_reset = null
-  saveSession(s)
+  updateSession(slug, cur => {
+    if (cur.status !== 'running') cur.resume_status = cur.status
+    cur.status = 'running'; cur.turns = (cur.turns || 0) + 1; cur.error = null; cur.limit_reset = null; cur.failed_job = null
+    if (job.kind === 'decision') cur.decision_replies[job.decision.id] = { ...cur.decision_replies[job.decision.id], status: 'working', started_at: now() }
+  })
 
   const child = spawnClaude(args, {
     cwd: dir, stdio: ['pipe', 'pipe', 'pipe'],
@@ -324,7 +387,7 @@ async function runTurn(slug, message) {
   })
   state.child = child
   child.stdin.end(message)
-  push({ kind: 'status', icon: '⏳', text: first ? 'Starting the council…' : 'The council is working…' })
+  push({ kind: 'status', icon: '⏳', text: first ? 'Starting the council…' : job.kind === 'decision' ? `Answering ${job.decision.id} from the gate page…` : 'The council is working…' })
 
   let buf = ''
   child.stdout.setEncoding('utf8')
@@ -344,7 +407,7 @@ async function runTurn(slug, message) {
   function handleStream(msg) {
     if (msg.type === 'system' && msg.subtype === 'init') {
       const plugins = (msg.plugins || []).map(p => p.name)
-      s.model = msg.model || s.model
+      state.model = msg.model || null
       push({ kind: 'status', icon: '🟢', text: `Claude ${msg.model ? '(' + msg.model + ') ' : ''}started on your subscription${plugins.length ? ' · plugins: ' + plugins.join(', ') : ''}` })
       for (const e of msg.plugin_errors || []) push({ kind: 'error', icon: '⚠', text: `Plugin ${e.plugin || ''} did not load: ${e.message}` })
       return
@@ -380,24 +443,44 @@ async function runTurn(slug, message) {
     if (msg.type === 'result') {
       state.resultText = typeof msg.result === 'string' ? msg.result : ''
       state.isError = Boolean(msg.is_error) || (msg.subtype && msg.subtype !== 'success')
-      if (/^[0-9a-f-]{36}$/i.test(msg.session_id || '')) s.session_id = msg.session_id
+      if (/^[0-9a-f-]{36}$/i.test(msg.session_id || '')) state.sessionId = msg.session_id
     }
   }
 
   child.on('error', e => { state.stderr += `\n${e.message}` })
   child.on('close', code => {
     live.delete(slug)
+    const s = loadSession(slug)
+    if (state.sessionId) s.session_id = state.sessionId
+    if (state.model) s.model = state.model
+    const back = s.resume_status && s.resume_status !== 'running' ? s.resume_status : 'waiting'
     const all = `${state.resultText || ''}\n${state.stderr}`
     if (LIMIT_PAT.test(all) && (state.isError || code !== 0 || (state.resultText || '').length < 300)) {
+      // Pause: put the job back at the front; Continue picks it up again.
       s.status = 'limit'
       s.limit_reset = parseLimitReset(all)
       s.error = (state.resultText || state.stderr).trim().slice(-300)
+      if (!queues.has(slug)) queues.set(slug, [])
+      queues.get(slug).unshift(job)
+      if (job.kind === 'decision') s.decision_replies[job.decision.id] = { ...s.decision_replies[job.decision.id], status: 'queued' }
       addTranscript(slug, { role: 'system', kind: 'limit', text: s.error, reset: s.limit_reset })
     } else if (code !== 0 || state.isError || state.resultText == null) {
-      s.status = 'error'
-      s.error = ((state.resultText || '') + '\n' + state.stderr).trim().slice(-800) || `Claude Code exited with code ${code}.`
-      if (/log ?in|sign ?in|auth/i.test(s.error)) s.error += '\n\nIf this is about signing in: open a terminal, run `claude`, and sign in with your Claude account.'
-      addTranscript(slug, { role: 'system', kind: 'error', text: s.error })
+      const err = ((state.resultText || '') + '\n' + state.stderr).trim().slice(-800) || `Claude Code exited with code ${code}.`
+      if (job.kind === 'decision') {
+        s.status = back
+        s.decision_replies[job.decision.id] = { ...s.decision_replies[job.decision.id], status: 'error', message: err.slice(-300), at: now() }
+      } else {
+        s.status = 'error'
+        s.error = err
+        s.failed_job = job
+        if (/log ?in|sign ?in|auth/i.test(s.error)) s.error += '\n\nIf this is about signing in: open a terminal, run `claude`, and sign in with your Claude account.'
+        addTranscript(slug, { role: 'system', kind: 'error', text: s.error })
+      }
+    } else if (job.kind === 'decision') {
+      s.status = back
+      const reply = decisionReply(dir, job, state.resultText)
+      s.decision_replies[job.decision.id] = { ...s.decision_replies[job.decision.id], ...reply, at: now() }
+      addTranscript(slug, { role: 'decision', id: job.decision.id, status: reply.status, text: reply.message, request: job.decision.request })
     } else {
       const ui = parseUi(state.resultText)
       if (ui.gate?.file) {
@@ -413,8 +496,48 @@ async function runTurn(slug, message) {
     saveSession(s)
     state.finished = true
     finished.set(slug, state)
+    setImmediate(pump)
   })
   return s
+}
+
+// After a decision job: the council's short answer, the decision as it now stands in the register,
+// and the level's flags re-checked, so the gate page can refresh just that card.
+function decisionReply(dir, job, text) {
+  const id = job.decision.id
+  let reply = null
+  const m = [...String(text || '').matchAll(/```council-decision\s*([\s\S]*?)```/g)].pop()
+  if (m) { try { reply = JSON.parse(m[1]) } catch { reply = null } }
+  const record = readDecision(dir, id)
+  const status = ['resolved', 'updated', 'question'].includes(reply?.status) ? reply.status
+    : record?.status === 'decided' ? 'resolved' : 'updated'
+  const message = reply?.message || String(text || '').replace(/```[\s\S]*?```/g, '').trim().slice(0, 600)
+  return { status, message, decision: record, level_flags: recheck(dir, job.decision.level) }
+}
+
+function readDecision(dir, id) {
+  const f = join(dir, 'plan', 'decisions.jsonl')
+  if (!existsSync(f)) return null
+  for (const line of readFileSync(f, 'utf8').split('\n')) {
+    if (!line.trim()) continue
+    try { const d = JSON.parse(line); if (d.id === id) return d } catch { /* skip */ }
+  }
+  return null
+}
+
+// Run the level check (no tokens: plain Python) and return the level's flags.
+function recheck(dir, level) {
+  const script = join(CFG.plugin, 'scripts', 'level_check.py')
+  if (!existsSync(script)) return null
+  for (const py of [CFG.python, 'python', 'py', 'python3'].filter(Boolean)) {
+    const r = spawnSync(py, [script, dir, '--level', String(level), '--quiet'], {
+      cwd: dir, env: { ...process.env, COUNCIL_LIBRARY: CFG.library, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }, encoding: 'utf8', timeout: 60000,
+    })
+    if (r.error) continue
+    const out = readJson(join(dir, 'plan', 'levels', `L${level}-check.json`))
+    return out?.flags ?? null
+  }
+  return null
 }
 const finished = new Map()   // slug -> last finished turn's state, for its activity feed
 
@@ -470,6 +593,8 @@ function sessionView(slug, since = 0) {
   const st = live.get(slug) || finished.get(slug)
   return {
     session: { ...s, status: live.has(slug) ? 'running' : s.status },
+    current: live.get(slug)?.job ? { kind: live.get(slug).job.kind, decision: live.get(slug).job.decision?.id || null } : null,
+    queue: (queues.get(slug) || []).map(j => ({ kind: j.kind, decision: j.decision?.id || null, at: j.at })),
     transcript: transcript(slug),
     running: live.has(slug),
     elapsed: st && live.has(slug) ? Math.round((Date.now() - st.startedAt) / 1000) : null,
@@ -508,7 +633,7 @@ async function route(req, res) {
     if (!auth.subscription) throw httpError(412, auth.problem)
     const s = createProject(b)
     const kickoff = `[author] I want to plan a new project with the council.\n\nProject name: ${s.name}\nProject folder: ${projDir(s.slug)}\nMy idea, in my own words, is saved verbatim in 00-brief.md:\n\n${readFileSync(join(projDir(s.slug), '00-brief.md'), 'utf8')}\nStart the guided session: load the guided-session skill, do the setup, then ask me the first scoping question.`
-    await runTurn(s.slug, kickoff)
+    enqueue(s.slug, { kind: 'main', message: kickoff })
     return send(res, 201, { slug: s.slug })
   }
 
@@ -519,16 +644,49 @@ async function route(req, res) {
   if (action === 'reply' && M === 'POST') {
     const b = await body(req)
     const text = authorMessage(b)
+    loadSession(slug)
     addTranscript(slug, { role: 'author', text, choice: b.choice || null })
-    try { await runTurn(slug, `[author] ${text}`) } catch (e) { addTranscript(slug, { role: 'system', kind: 'error', text: e.message }); throw e }
+    enqueue(slug, { kind: 'main', message: `[author] ${text}` })
     return send(res, 202, { ok: true })
   }
 
   if (action === 'retry' && M === 'POST') {
-    const t = transcript(slug).filter(e => e.role === 'author').pop()
-    const msg = t ? `[author] ${t.text}` : '[author] Please continue where you left off.'
-    await runTurn(slug, `${msg}\n\n(Your last turn did not finish. Check the project files for what was already done, then continue.)`)
+    const s = loadSession(slug)
+    if (s.status === 'limit') {
+      // Resume the paused queue: the interrupted job is already back at its front.
+      updateSession(slug, cur => { cur.status = cur.resume_status && cur.resume_status !== 'running' ? cur.resume_status : 'waiting'; cur.limit_reset = null })
+      if (!(queues.get(slug) || []).length) enqueue(slug, { kind: 'main', message: '[author] Please continue where you left off. (Your last turn hit the usage limit; check the project files for what was already done.)' })
+      else setImmediate(pump)
+    } else {
+      const job = s.failed_job || { kind: 'main', message: `[author] ${transcript(slug).filter(e => e.role === 'author').pop()?.text || 'Please continue where you left off.'}` }
+      enqueue(slug, { kind: job.kind, decision: job.decision, message: `${job.message}\n\n(Your last turn did not finish. Check the project files for what was already done, then continue.)` })
+    }
     return send(res, 202, { ok: true })
+  }
+
+  if (action === 'decision' && M === 'POST') {
+    const b = await body(req)
+    const id = String(b.id || '')
+    const n = Number(b.level), k = Number(b.revision)
+    if (!/^D-\d+$/.test(id)) throw httpError(400, 'Bad decision id.')
+    if (!Number.isInteger(n) || n < 0 || n > 4) throw httpError(400, 'Bad level.')
+    const choice = b.choice ? String(b.choice) : null
+    const words = String(b.comment || '').trim()
+    if (!choice && !words) throw httpError(400, 'Pick an option or type an answer first.')
+    const s = loadSession(slug)
+    if ((queues.get(slug) || []).some(j => j.decision?.id === id) || live.get(slug)?.job?.decision?.id === id) throw httpError(409, `The council is already working on ${id}. Wait for its reply, then answer again.`)
+    const rec = readDecision(projDir(slug), id)
+    const title = rec?.title ? ` "${rec.title}"` : ''
+    const request = { choice, comment: words }
+    const message = `[board] Lance answered ${id}${title} on the L${n} gate page (revision ${k}). He is working through the gate's decisions in his own order; handle ONLY this decision now (see "Single-decision turns" in guided-session), then stop.
+
+${choice ? `His pick: option ${choice}${choice === 'test' ? ' (test first)' : ''}` : 'His pick: none'}
+${words ? `His words: "${words}"` : 'His words: none'}
+
+End with a council-decision block for ${id}, not a council-ui block.`
+    enqueue(slug, { kind: 'decision', message, decision: { id, level: n, revision: k, request } })
+    addTranscript(slug, { role: 'author', kind: 'decision', id, text: `${id}: ${choice ? `option ${choice}` : ''}${choice && words ? '. ' : ''}${words}` })
+    return send(res, 202, { ok: true, queued: (queues.get(slug) || []).length, session: s.slug })
   }
 
   if (action === 'stop' && M === 'POST') return send(res, 200, { stopped: stopTurn(slug) })
@@ -551,10 +709,12 @@ async function route(req, res) {
     const d = b.review.decision
     if (!d) return send(res, 200, { ok: true, started: false })   // a draft: nothing for the council yet
     const label = d === 'approved' ? 'approved the level' : 'sent the level back with changes'
-    const decs = Object.entries(b.review.decisions || {}).filter(([, v]) => v?.choice).map(([id, v]) => `${id}: ${v.choice}`).join(', ')
-    const text = `Lance ${label} on the board (L${n}, revision ${k}).${decs ? ` Decisions recorded on the gate page: ${decs}.` : ''}`
+    const decs = Object.entries(b.review.decisions || {}).filter(([, v]) => v?.choice || v?.comment?.trim())
+      .map(([id, v]) => `- ${id}: ${v.choice ? `option ${v.choice}` : 'no option picked'}${v.comment?.trim() ? `. Lance wrote: "${v.comment.trim()}"` : ''}`).join('\n')
+    const overall = b.review.comment?.trim() ? `\nOverall comment: "${b.review.comment.trim()}"` : ''
+    const text = `Lance ${label} on the board (L${n}, revision ${k}).${overall}${decs ? `\nOn the plan decisions:\n${decs}` : ''}`
     addTranscript(slug, { role: 'author', text, kind: 'review', level: n, revision: k, decision: d })
-    await runTurn(slug, `[board] ${text}\nThe review is saved at ${rel}. Apply it with gate_apply.py (--review ${rel}) and continue the guided session.`)
+    enqueue(slug, { kind: 'main', message: `[board] ${text}\nThe review is saved at ${rel}. Apply it with gate_apply.py (--review ${rel}) and continue the guided session.` })
     return send(res, 202, { ok: true, started: true })
   }
 

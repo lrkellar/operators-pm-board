@@ -136,6 +136,7 @@ export default function PlanGate({ planId, level, onBack, backLabel }) {
   const openDecisions = decisions.filter(d => d.status !== 'decided' && !chosenHere(d.id)).length
   const decTitle = Object.fromEntries(decisions.map(d => [d.id, d]))
   const canApprove = !blocking && !tally.change && !busy
+  const decAnswers = Object.values(decs).filter(v => v?.choice || v?.comment?.trim()).length
   const sel = selected ? (byId[selected] ?? (payload.parents ?? []).find(p => p.id === selected)) : null
 
   // groups: approved parents with their new children underneath
@@ -206,6 +207,11 @@ export default function PlanGate({ planId, level, onBack, backLabel }) {
             <div style={{ fontSize: 12, color: '#999', marginBottom: 10, lineHeight: 1.5 }}>
               The choices this level is built on. Choices you made with the panel in the conversation are shown; confirm them,
               or pick another option. Changing a decided choice marks every item that relied on it as stale.
+              Where the panel has no options yet, type your answer; they frame the options from it.
+            </div>
+            <div style={{ fontSize: 12, color: '#FFB74D', marginBottom: 12, lineHeight: 1.5 }}>
+              Nothing here is sent on its own: your picks and answers go to the council when you press <b>Send back</b> or{' '}
+              <b>Approve level</b> at the bottom of the page.
             </div>
             {decisions.map(d => (
               <DecisionCard key={d.id} d={d} pick={decs[d.id]} scenario={scenario}
@@ -327,7 +333,10 @@ export default function PlanGate({ planId, level, onBack, backLabel }) {
             )}
           </div>
           <div style={{ fontSize: 11, color: err ? '#F44336' : msg ? '#4CAF50' : '#888', maxWidth: 520, textAlign: 'right' }}>
-            {err || msg || (blocking ? `${blocking} blocking flag${blocking > 1 ? 's' : ''}: this level can only be sent back.` : 'Unmarked items count as approved when you approve the level.')}
+            {err || msg || <>
+              {decAnswers > 0 && <b style={{ color: '#b39dff' }}>{decAnswers} decision answer{decAnswers > 1 ? 's' : ''} will be sent. </b>}
+              {blocking ? `${blocking} blocking flag${blocking > 1 ? 's' : ''}: this level can only be sent back.` : 'Unmarked items count as approved when you approve the level.'}
+            </>}
           </div>
         </div>
       </div>
@@ -610,9 +619,11 @@ function DecisionCard({ d, pick, onPick, onComment, scenario }) {
           <button onClick={() => onPick('test')} style={{ ...btn(pick?.choice === 'test' ? '#1565c0' : '#2a2a3e'), border: '1px solid #64B5F6' }}
             title={d.test.description}>Test first{d.test.owner_h ? ` (~${d.test.owner_h} h${d.test.cash_usd ? `, $${d.test.cash_usd}` : ''})` : ''}</button>
         )}
-        <input value={pick?.comment ?? ''} onChange={e => onComment(e.target.value)}
-          placeholder="Why this choice? (optional, the panel reads it)"
-          style={{ ...input, flex: 1, minWidth: 220 }} />
+        <textarea value={pick?.comment ?? ''} onChange={e => onComment(e.target.value)} rows={(d.options ?? []).length ? 1 : 2}
+          placeholder={(d.options ?? []).length
+            ? 'Why this choice? (optional, the panel reads it)'
+            : 'Your answer or thinking. The panel frames the options from it. Sent with Send back or Approve level.'}
+          style={{ ...input, flex: 1, minWidth: 220, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4 }} />
       </div>
       {(d.flags ?? []).length > 0 && <div style={{ marginTop: 8 }}>{d.flags.map((f, k) => <Flag key={k} f={f} />)}</div>}
     </div>
